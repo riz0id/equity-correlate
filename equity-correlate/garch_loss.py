@@ -52,7 +52,7 @@ def garch_loss(r, theta, p, q):
         for i in range(len(r)):
             loss += np.log(s[i] ** 2) + (r[i]/s[i])**2
 
-        print(f"training loss {loss}")
+        # print(f"training loss {loss}")
 
         return loss
 

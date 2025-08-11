@@ -13,8 +13,10 @@
 
 let
   python-env = python312.withPackages (pp: [
+    pp.matplotlib
     pp.numpy
-    pp.scpy
+    pp.pandas
+    pp.scipy
     python-polygon
   ]);
 in mkShell {

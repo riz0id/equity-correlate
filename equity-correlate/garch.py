@@ -1,7 +1,7 @@
 
 import numpy as np
 
-from loss import garch_process
+from garch_loss import garch_process
 from scipy.optimize import minimize
 
 class GARCH():
@@ -80,7 +80,7 @@ class GARCH():
 
             tr_loss = self.get_loss_func()(tr)(theta)
             tr_losses.append(tr_loss)
-            print("Iteration: %d. Training loss: %.3E." % (j, tr_loss))
+            # print("Iteration: %d. Training loss: %.3E." % (j, tr_loss))
 
             # Early stopping
             if self.early_stopping is True:

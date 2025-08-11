@@ -1,12 +1,20 @@
 
-from argparse import (ArgumentParser, ArgumentTypeError)
-from datetime import (datetime, timedelta)
-from itertools import repeat
 import json
 import numpy
 import os
+import pandas as pd
+
+from garch import *
+from garch_loss import *
+from dcc import *
+from dcc_loss import *
+
+from argparse import (ArgumentParser, ArgumentTypeError)
+from datetime import (datetime, timedelta)
+from itertools import repeat
 from polygon import (RESTClient)
 from typing import (Optional)
+
 
 def polygon_api_key() -> str:
     """
@@ -70,9 +78,59 @@ def dateformat(s: str) -> datetime:
     else:
         return date
 
+def get_aggs(
+        tickers: list[str],
+        start: datetime,
+        end: datetime,
+        timespan: str = 'hour'
+    ):
+
+    client = RESTClient(api_key=polygon_api_key())
+
+    dfs = []
+
+    for ticker in tickers:
+        records = client.get_aggs(
+            ticker=ticker,
+            multiplier=1,
+            adjusted=True,
+            from_=start,
+            to=end,
+            timespan=timespan,
+            sort='asc'
+        )
+
+        data = []
+
+        for record in records:
+            date = datetime.fromtimestamp(record.timestamp / 1000.0) # convert milliseconds to seconds
+
+            if is_weekday(date):
+                data.append({
+                    'date': np.datetime64(f"{date.year}-{date.month:02d}-{date.day:02d}"), # record.timestamp / 1000.0,
+                    'open': record.open,
+                    'high': record.high,
+                    'low': record.low,
+                    'close': record.close,
+                    'volume': record.volume,
+                })
+
+        arr = numpy.array(data)
+
+        df = pd.DataFrame.from_records(
+            data=data,
+            columns=['date', 'open', 'high', 'low', 'close', 'volume'],
+            index='date',
+        )
+
+        dfs.append(df)
+
+
+    return dfs
+
 timespans: list[str] = ['day', 'week', 'month']
 
-async def main():
+def main():
     parser = ArgumentParser(
         prog='equity-correlate',
         description="""
@@ -113,7 +171,31 @@ async def main():
     )
 
     parser.add_argument(
-        'equities',
+        '--iterations',
+        default=None,
+        help="""
+            (Option). The number of GARCH iterations to perform. Defaults to 1
+            if not specified.
+        """,
+        metavar='N',
+        type=int,
+        required=False,
+    )
+
+    parser.add_argument(
+        '--order',
+        default=None,
+        help="""
+            (Option). The order of GARCH model to use. Defaults to 1 if not
+            specified.
+        """,
+        metavar='N',
+        type=int,
+        required=False,
+    )
+
+    parser.add_argument(
+        'tickers',
         default=None,
         help="""
             (Required). One or more tickers for equities to use in the
@@ -125,75 +207,133 @@ async def main():
 
     args = parser.parse_args()
 
-    client = RESTClient(api_key=polygon_api_key())
-
     dates = []
 
     for date in date_range_list(args.start, args.end):
         if is_weekday(date):
             dates.append(date)
 
-    price_data = {}
+    aggs = get_aggs(tickers=args.tickers, start=args.start, end=args.end, timespan='day')
 
-    for timespan in timespans:
-        for equity in args.equities:
-            quotes = []
+    for i, this_ticker in enumerate(args.tickers):
+        ticker_data = aggs[i]
 
-            aggs = client.get_aggs(
-                ticker=equity,
-                multiplier=1,
-                adjusted=True,
-                from_=args.start,
-                to=args.end,
-                timespan=timespan,
-                sort='asc'
-            )
+        for v, other_ticker in enumerate(args.tickers):
+            if i != v:
+                new_this_data, new_that_data = ticker_data.align(aggs[v], join='inner', axis=0)
+                aggs[i] = new_this_data
+                aggs[v] = new_that_data
 
-            for agg in aggs:
-                date = datetime.fromtimestamp(agg.timestamp / 1000.0)
 
-                quotes.append({
-                    'close': agg.close,
-                    'date': datetime(date.year, date.month, date.day),
-                })
 
-            price_data[equity] = quotes
+    results = {}
 
-        series = {}
+    for i, s1 in enumerate(args.tickers):
+        results[i] = {}
 
-        for equity, quotes in price_data.items():
-            for quote in quotes:
-                date = quote['date']
+        for v, s2 in enumerate(args.tickers):
+            if s1 != s2 and i > v:
+                s1_aggs = aggs[i] # pd.read_csv('data/^GSPC.csv').set_index('Date')
+                s1_aggs.to_csv(f'data/{s1}.csv', index=True)
 
-                if series.get(date, None) is None:
-                    series[date] = []
+                s1_return = np.log(s1_aggs['close']).diff().dropna() # log return of S&P500 index
+                s1_return = s1_return.iloc[::-1] # the latest data should come first
 
-                series[date].append(quote['close'])
+                s1_model = GARCH(args.order, args.order)
+                s1_model.set_loss(garch_loss_gen(args.order, args.order))
+                s1_model.set_max_itr(args.iterations)
+                s1_model.fit(s1_return)
 
-        nequities = len(args.equities)
-        prices = []
+                s1_theta = s1_model.get_theta()
+                s1_sigma = s1_model.sigma(s1_return)
+                s1_epsilon = s1_return / s1_sigma
 
-        for _ in range(nequities):
-            prices.append([])
+                s2_aggs = aggs[v] # pd.read_csv('data/JPM.csv').set_index('Date')
 
-        for date, values in series.items():
+                s2_return = np.log(s2_aggs['close']).diff().dropna() # log return of JP Morgan Chase & Co.
+                s2_return = s2_return.iloc[::-1] # the latest data should come first
 
-            if len(values) == nequities:
-                for i in range(nequities):
-                    prices[i].append(values[i])
+                s2_model = GARCH(args.order, args.order)
+                s2_model.set_loss(garch_loss_gen(args.order, args.order))
+                s2_model.set_max_itr(args.iterations)
 
-        cor = numpy.corrcoef(prices)
+                s2_model.fit(s2_return)
 
-        print("correlation")
-        print(args.equities)
-        print(cor)
+                s2_theta = s2_model.get_theta()
+                s2_sigma = s2_model.sigma(s2_return)
+                s2_epsilon = s2_return / s2_sigma
 
-        cov = numpy.cov(prices)
+                epsilon = np.array([
+                    s1_epsilon,
+                    s2_epsilon
+                ])
 
-        print("covariance")
-        print(args.equities)
-        print(cov)
+                dcc_model = DCC()
+                dcc_model.set_loss(dcc_loss_gen())
+                dcc_model.fit(epsilon)
+
+                result = dcc_model.get_ab()
+
+                print(f"{s1}: {s1_theta}")
+                print(f"{s2}: {s2_theta}")
+                print(args.tickers)
+                print(result)
+
+                results[i][v] = result[0]
+                results[v][i] = result[1]
+
+    print(results)
+    df_results = pd.DataFrame(data=results, columns=args.tickers)
+    df_results.to_csv('data/results.csv')
+
+    print("finished...")
+
+#     price_data[equity] = get_aggs(
+#         client=client,
+#         ticker=equity,
+#         start=args.start,
+#         end=args.end,
+#         timespan='day'
+#     )
+
+#     series = {}
+
+#     for equity, quotes in price_data.items():
+#         for quote in quotes:
+#             date = quote['date']
+
+#             if series.get(date, None) is None:
+#                 series[date] = []
+
+#             series[date].append(quote['close'])
+
+#     nequities = len(args.tickers)
+#     prices = []
+
+#     for _ in range(nequities):
+#         prices.append([])
+
+#     for date, values in series.items():
+
+#         if len(values) == nequities:
+#             for i in range(nequities):
+#                 prices[i].append(values[i])
+
+#     cor = numpy.corrcoef(prices)
+
+#     print("correlation")
+#     print(args.tickers)
+#     print(cor)
+
+#     cov = numpy.cov(prices)
+
+#     print("covariance")
+#     print(args.tickers)
+#     print(cov)
+
+# if __name__ == '__main__':
+#     import asyncio
+#     asyncio.run(main())
 
 if __name__ == '__main__':
-    import asyncio
-    asyncio.run(main())
+    main()
