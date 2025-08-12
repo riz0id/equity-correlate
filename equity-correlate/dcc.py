@@ -1,86 +1,107 @@
+
 import numpy as np
-from scipy.optimize import minimize
+import scipy.optimize
+
 from dcc_loss import dcc_loss_gen
+from model import (Minimize)
+from typing import (Callable, NoReturn, Self)
 
-class DCC():
 
-    def __init__(self, max_itr=2, early_stopping=True):
-        self.max_itr = max_itr
-        self.early_stopping = early_stopping
-        self.ab = np.array([0.5, 0.5])
-        self.method =  'SLSQP'
+class DCC(Minimize):
+    """
+    Dynamic Conditional Correlation (DCC) model for multivariate time series.
+    """
+
+    def __init__(self: Self, **kwargs) -> NoReturn:
+
+        super().__init__(loss=dcc_loss_gen(), **kwargs)
+
+        self._ab = np.array([0.5, 0.5])
+
         def ub(x):
-            return 1. - x[0] - x[1]
+            return 1.0 - x[0] - x[1]
+
         def lb1(x):
             return x[0]
+
         def lb2(x):
             return x[1]
-        self.constraints = [{'type':'ineq', 'fun':ub},{'type':'ineq', 'fun':lb1},{'type':'ineq', 'fun':lb2}]
 
-    def set_ab(self,ab): # ndarray
-        self.ab = ab
+        self.constraints = [
+            {'type':'ineq', 'fun':ub},
+            {'type':'ineq', 'fun':lb1},
+            {'type':'ineq', 'fun':lb2}
+        ]
 
-    def get_ab(self):
-        return self.ab
 
-    def set_method(self,method):
-        self.method = method
+    @property
+    def ab(self: Self) -> np.ndarray[float]:
+        """
+        Get the parameters for the DCC model.
+        """
 
-    def set_loss(self, loss_func):
-        #"loss function L is a meta-function, s.t. L(r) = f(theta)."
-        self.loss_func = loss_func
+        return self._ab
 
-    def get_loss_func(self):
-        if self.loss_func is None:
-            raise Exception("No Loss Function Found!")
-        else:
-            return self.loss_func
+    @ab.setter
+    def ab(self: Self, ab: np.ndarray[float]) -> NoReturn:
+        """
+        Set the parameters for the DCC model.
+        """
 
-    def set_max_itr(self, max_itr):
-        self.max_itr = max_itr
+        self._ab = ab
 
-    def get_max_itr(self):
-        return self.max_itr
 
-    def fit(self, train_data):
-        #train_data: numpy.array([[e1_T,...e1_0],\
-        #                         [e2_T,...e2_0],\
-        #                         ...,
-        #                         [en_T,...en_0]])
+    def fit(self: Self, train_data: np.ndarray) -> list[float]:
+        """
+        Fit the DCC model to the training data.
 
-        tr = train_data
+        :param train_data: The training data to fit the model to.
+        :return: A list of losses for each iteration.
+        """
+
+        # numpy.array([
+        #   [e1_T, ..., e1_0],
+        #   [e2_T,  ..., e2_0],
+        #   ...,
+        #   [en_T,  ..., en_0]
+        # ])
+        tr: np.ndarray = train_data
 
         # Optimize using scipy and save theta
-        tr_losses = []
-        j = 0
-        count = 0
-        while j < self.get_max_itr():
+        tr_losses: list[float] = []
+
+        j: int = 0
+        count: int = 0
+
+        while j < self.max_iterations:
             j += 1
-            ab0 = np.array(self.get_ab())
-            res = minimize(self.get_loss_func()(tr), ab0, method=self.method,
-                           options={'disp': True},constraints=self.constraints)
+
+            res: np.ndarray[float] = scipy.optimize.minimize(
+                self.loss(tr),
+                np.array(self.ab),
+                constraints=self.constraints,
+                method=self.method,
+                options={
+                    'disp': True
+                },
+            )
+
             ab = res.x
-            self.set_ab(ab)
+            self.ab = ab
 
-            tr_loss = self.get_loss_func()(tr)(ab)
+            tr_loss: float = self.loss(tr)(ab)
             tr_losses.append(tr_loss)
-            # print("Iteration: %d. Training loss: %.3E." % (j, tr_loss))
 
-            # Early stopping
-            if self.early_stopping is True:
+            if self.stopping_early is True:
                 if j > 10:
-                    if abs(tr_losses[-1] - tr_losses[-2]) / tr_losses[-2] < 0.0001:
+                    loss_final = tr_losses[-1]
+                    loss_prev  = tr_losses[-2]
+
+                    if abs(loss_final - loss_prev) / loss_prev < 0.0001:
                         count += 1
+
                         if count >= 2:
                             print("Early Stopping...")
                             return tr_losses
 
         return tr_losses
-
-
-    def Q(self,y):
-        Q = Q_gen(y,self.ab)
-        return Q
-
-    def Q_bar(self,y):
-        return Q_average(y)

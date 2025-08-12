@@ -1,7 +1,5 @@
 
-import json
 import numpy
-import os
 import pandas as pd
 
 from garch import *
@@ -11,24 +9,8 @@ from dcc_loss import *
 
 from argparse import (ArgumentParser, ArgumentTypeError)
 from datetime import (datetime, timedelta)
-from itertools import repeat
 from polygon import (RESTClient)
-from typing import (Optional)
 
-
-def polygon_api_key() -> str:
-    """
-    Obtains the Polygon.io API key by reading the $POLYGON_API_KEY environment
-    variable. If the $POLYGON_API_KEY variable is not set, then a ValueError
-    will be raised.
-    """
-
-    result = os.getenv('POLYGON_API_KEY')
-
-    if result is None:
-        raise ValueError('no Polygon.io API present at $POLYGON_API_KEY')
-    else:
-        return result.strip()
 
 def date_range_list(start_date: datetime, end_date: datetime) -> list[datetime]:
     """
@@ -79,13 +61,15 @@ def dateformat(s: str) -> datetime:
         return date
 
 def get_aggs(
+        api_key: str,
         tickers: list[str],
         start: datetime,
         end: datetime,
-        timespan: str = 'hour'
+        column: str = 'close',
+        timespan: str = 'day'
     ):
 
-    client = RESTClient(api_key=polygon_api_key())
+    client = RESTClient(api_key=api_key)
 
     dfs = []
 
@@ -102,7 +86,7 @@ def get_aggs(
 
         data = []
 
-        for record in records:
+        for i, record in enumerate(records):
             date = datetime.fromtimestamp(record.timestamp / 1000.0) # convert milliseconds to seconds
 
             if is_weekday(date):
@@ -118,7 +102,7 @@ def get_aggs(
         arr = numpy.array(data)
 
         df = pd.DataFrame.from_records(
-            data=data,
+            data=arr,
             columns=['date', 'open', 'high', 'low', 'close', 'volume'],
             index='date',
         )
@@ -143,6 +127,18 @@ def main():
                 equity-correlate --from 2023-01-01T00:00:00Z --to 2023-01-02T00:00:00Z BTC MSTR COIN
         """,
         allow_abbrev=False,
+    )
+
+    parser.add_argument(
+        '--api-key',
+        help="""
+            (Optional). The Polygon.io API key to use for the query. If not
+            specified, then the $POLYGON_API_KEY environment variable will be
+            used.
+        """,
+        metavar='KEY',
+        type=str,
+        required=True,
     )
 
     parser.add_argument(
@@ -171,10 +167,29 @@ def main():
     )
 
     parser.add_argument(
-        '--iterations',
+        '--column',
+        default='close',
+        help="""
+            (Optional). The column to use for the correlation calculation. Defaults
+            to 'close' if not specified.
+        """,
+        metavar='COLUMN',
+        type=str,
+        required=False,
+        choices=[
+            'open',
+            'high',
+            'low',
+            'close',
+            'volume'
+        ],
+    )
+
+    parser.add_argument(
+        '--max-iterations',
         default=None,
         help="""
-            (Option). The number of GARCH iterations to perform. Defaults to 1
+            (Optional). The number of GARCH iterations to perform. Defaults to 1
             if not specified.
         """,
         metavar='N',
@@ -183,10 +198,51 @@ def main():
     )
 
     parser.add_argument(
-        '--order',
-        default=None,
+        '--method',
+        default='SLSQP',
         help="""
-            (Option). The order of GARCH model to use. Defaults to 1 if not
+            (Optional). The optimization method to use. Defaults to 'SLSQP' if not
+            specified.
+        """,
+        metavar='METHOD',
+        required=False,
+        choices=[
+            'COBYLA',
+            'COBYQA',
+            'SLSQP',
+            'trust-constr'
+        ],
+    )
+
+    parser.add_argument(
+        '--stopping_early',
+        default=True,
+        help="""
+            (Optional). Whether to stop early if the loss does not improve.
+            Defaults to True if not specified.
+        """,
+        metavar='BOOLEAN',
+        type=bool,
+        required=False,
+    )
+
+    parser.add_argument(
+        '--p',
+        default=1,
+        help="""
+            (Optional). The order of GARCH model to use. Defaults to 1 if not
+            specified.
+        """,
+        metavar='N',
+        type=int,
+        required=False,
+    )
+
+    parser.add_argument(
+        '--q',
+        default=1,
+        help="""
+            (Optional). The order of GARCH model to use. Defaults to 1 if not
             specified.
         """,
         metavar='N',
@@ -196,7 +252,6 @@ def main():
 
     parser.add_argument(
         'tickers',
-        default=None,
         help="""
             (Required). One or more tickers for equities to use in the
             calculation for correlation matrix calculation.
@@ -213,7 +268,14 @@ def main():
         if is_weekday(date):
             dates.append(date)
 
-    aggs = get_aggs(tickers=args.tickers, start=args.start, end=args.end, timespan='day')
+    aggs = get_aggs(
+        api_key=args.api_key,
+        tickers=args.tickers,
+        start=args.start,
+        end=args.end,
+        timespan='day',
+        column=args.column,
+    )
 
     for i, this_ticker in enumerate(args.tickers):
         ticker_data = aggs[i]
@@ -224,116 +286,58 @@ def main():
                 aggs[i] = new_this_data
                 aggs[v] = new_that_data
 
+    def garch_model(i: int, ticker: str) -> tuple[float, float]:
+        aggs[i].to_csv(f'data/{ticker}.csv')
 
+        model = GARCH(
+            max_iterations=args.max_iterations,
+            p=args.p,
+            q=args.q,
+            method=args.method,
+            stopping_early=args.stopping_early,
+        )
+
+        returns = np.log(aggs[i][args.column]).diff().dropna()
+        returns = returns.iloc[::-1]
+
+        model.fit(returns)
+
+        sigma   = model.sigma(returns)
+        epsilon = returns / sigma
+
+        return model.theta, sigma, epsilon
 
     results = {}
 
     for i, s1 in enumerate(args.tickers):
         results[i] = {}
 
-        for v, s2 in enumerate(args.tickers):
-            if s1 != s2 and i > v:
-                s1_aggs = aggs[i] # pd.read_csv('data/^GSPC.csv').set_index('Date')
-                s1_aggs.to_csv(f'data/{s1}.csv', index=True)
+        for j, s2 in enumerate(args.tickers):
+            if s1 != s2 and i > j:
+                s1_theta, _, s1_epsilon = garch_model(i, s1)
+                s2_theta, _, s2_epsilon = garch_model(j, s2)
 
-                s1_return = np.log(s1_aggs['close']).diff().dropna() # log return of S&P500 index
-                s1_return = s1_return.iloc[::-1] # the latest data should come first
-
-                s1_model = GARCH(args.order, args.order)
-                s1_model.set_loss(garch_loss_gen(args.order, args.order))
-                s1_model.set_max_itr(args.iterations)
-                s1_model.fit(s1_return)
-
-                s1_theta = s1_model.get_theta()
-                s1_sigma = s1_model.sigma(s1_return)
-                s1_epsilon = s1_return / s1_sigma
-
-                s2_aggs = aggs[v] # pd.read_csv('data/JPM.csv').set_index('Date')
-
-                s2_return = np.log(s2_aggs['close']).diff().dropna() # log return of JP Morgan Chase & Co.
-                s2_return = s2_return.iloc[::-1] # the latest data should come first
-
-                s2_model = GARCH(args.order, args.order)
-                s2_model.set_loss(garch_loss_gen(args.order, args.order))
-                s2_model.set_max_itr(args.iterations)
-
-                s2_model.fit(s2_return)
-
-                s2_theta = s2_model.get_theta()
-                s2_sigma = s2_model.sigma(s2_return)
-                s2_epsilon = s2_return / s2_sigma
-
-                epsilon = np.array([
-                    s1_epsilon,
-                    s2_epsilon
-                ])
+                print(s1_epsilon)
+                epsilon = np.array([s1_epsilon, s2_epsilon])
 
                 dcc_model = DCC()
-                dcc_model.set_loss(dcc_loss_gen())
                 dcc_model.fit(epsilon)
 
-                result = dcc_model.get_ab()
+                result = dcc_model.ab
 
                 print(f"{s1}: {s1_theta}")
                 print(f"{s2}: {s2_theta}")
                 print(args.tickers)
                 print(result)
 
-                results[i][v] = result[0]
-                results[v][i] = result[1]
+                results[i][j] = result[0]
+                results[j][i] = result[1]
 
     print(results)
     df_results = pd.DataFrame(data=results, columns=args.tickers)
     df_results.to_csv('data/results.csv')
 
     print("finished...")
-
-#     price_data[equity] = get_aggs(
-#         client=client,
-#         ticker=equity,
-#         start=args.start,
-#         end=args.end,
-#         timespan='day'
-#     )
-
-#     series = {}
-
-#     for equity, quotes in price_data.items():
-#         for quote in quotes:
-#             date = quote['date']
-
-#             if series.get(date, None) is None:
-#                 series[date] = []
-
-#             series[date].append(quote['close'])
-
-#     nequities = len(args.tickers)
-#     prices = []
-
-#     for _ in range(nequities):
-#         prices.append([])
-
-#     for date, values in series.items():
-
-#         if len(values) == nequities:
-#             for i in range(nequities):
-#                 prices[i].append(values[i])
-
-#     cor = numpy.corrcoef(prices)
-
-#     print("correlation")
-#     print(args.tickers)
-#     print(cor)
-
-#     cov = numpy.cov(prices)
-
-#     print("covariance")
-#     print(args.tickers)
-#     print(cov)
-
-# if __name__ == '__main__':
-#     import asyncio
-#     asyncio.run(main())
 
 if __name__ == '__main__':
     main()

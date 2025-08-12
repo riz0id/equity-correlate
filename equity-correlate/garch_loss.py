@@ -1,7 +1,7 @@
 
 import numpy as np
 
-def garch_process(r, theta, p=1, q=1):
+def garch_process(r, theta, p: int = 1, q: int = 1):
 
     w = theta[0]
     alpha = theta[1:1 + p]
@@ -14,10 +14,13 @@ def garch_process(r, theta, p=1, q=1):
     r = np.array(r)
     T = len(r) - 1
 
-    def garch_update(s, r, t, alpha, beta, gamma, p=p, q=q, T=T):
-        "s = [st-1,...s0], r = [rT,...,r0], t is time" \
-        "alpha, beta and gamma are from above" \
-        "returns new_s = [st,...,s0]"
+    def garch_update(s, r, t, alpha, beta, gamma, T=T):
+        """
+        s = [st-1,...s0], r = [rT,...,r0], t is time"
+        alpha, beta and gamma are from above"
+        returns new_s = [st,...,s0]
+        """
+
         r_temp = r[T - t + 1:T - t + 1 + q]  # [rt-1,...,rt-q]
         s_temp = s[0:p]  # [st-1,...st-p]
 
@@ -50,7 +53,7 @@ def garch_loss(r, theta, p, q):
         loss = 0.0
 
         for i in range(len(r)):
-            loss += np.log(s[i] ** 2) + (r[i]/s[i])**2
+            loss += np.log(s[i] ** 2) + (r.iloc[i]/s[i])**2
 
         # print(f"training loss {loss}")
 
