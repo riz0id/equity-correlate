@@ -57,7 +57,6 @@ def dcc_loss(tr, ab, p: int = 1, q: int = 1):
             ei  = tr[:,i]
 
             loss += np.log(np.linalg.det(Ri)) + np.dot(np.dot(ei,Ri_),ei)
-            # print('training loss %f' % loss)
 
         return loss
 

@@ -101,7 +101,7 @@ class GARCH(Minimize):
                 self.loss(tr),
                 self.theta,
                 method=self.method,
-                options={'disp': True},
+                options={'disp': False},
                 constraints=self.constraints
             )
 
@@ -110,7 +110,6 @@ class GARCH(Minimize):
 
             tr_loss = self.loss(tr)(theta)
             tr_losses.append(tr_loss)
-            # print("Iteration: %d. Training loss: %.3E." % (j, tr_loss))
 
             # Early stopping
             if self.stopping_early is True:
@@ -118,7 +117,6 @@ class GARCH(Minimize):
                     if abs(tr_losses[-1] - tr_losses[-2]) / tr_losses[-2] < 0.0001:
                         count += 1
                         if count >= 2:
-                            print("Early Stopping...")
                             return tr_losses
         return tr_losses
 

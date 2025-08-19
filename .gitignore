@@ -1,6 +1,7 @@
-./build
+**/./build
 **/__pycache__
-.tmp/
-.venv
-.vscode
+**/.tmp/
+**/.venv
+**/.vscode
 **/*.csv
+**/*.db

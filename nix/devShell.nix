@@ -14,8 +14,11 @@
 let
   python-env = python312.withPackages (pp: [
     pp.matplotlib
+    pp.mplfinance
+    pp.mypy
     pp.numpy
     pp.pandas
+    pp.pandas-stubs # mypy stubs for pandas
     pp.scipy
     python-polygon
   ]);

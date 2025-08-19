@@ -1,5 +1,5 @@
 
-# 
+#
 
 
 
@@ -7,5 +7,5 @@
 
 ```shell
 $ nix develop
-$ python equity-correlate
+$ python correlate
 ```

@@ -12,27 +12,20 @@ class DCC(Minimize):
     Dynamic Conditional Correlation (DCC) model for multivariate time series.
     """
 
-    def __init__(self: Self, **kwargs) -> NoReturn:
+    def __init__(self: Self, n=2, **kwargs) -> NoReturn:
 
         super().__init__(loss=dcc_loss_gen(), **kwargs)
 
-        self._ab = np.array([0.5, 0.5])
+        self._ab = np.array([0.5, 0.5])  # Initial values for a and b
 
         def ub(x):
-            return 1.0 - x[0] - x[1]
-
-        def lb1(x):
-            return x[0]
-
-        def lb2(x):
-            return x[1]
+            return 1 - x[0] - x[1]
 
         self.constraints = [
             {'type':'ineq', 'fun':ub},
-            {'type':'ineq', 'fun':lb1},
-            {'type':'ineq', 'fun':lb2}
+            {'type':'ineq', 'fun': lambda x: x[0]},
+            {'type':'ineq', 'fun': lambda x: x[1]},
         ]
-
 
     @property
     def ab(self: Self) -> np.ndarray[float]:
@@ -82,7 +75,7 @@ class DCC(Minimize):
                 constraints=self.constraints,
                 method=self.method,
                 options={
-                    'disp': True
+                    'disp': False
                 },
             )
 
@@ -101,7 +94,6 @@ class DCC(Minimize):
                         count += 1
 
                         if count >= 2:
-                            print("Early Stopping...")
                             return tr_losses
 
         return tr_losses

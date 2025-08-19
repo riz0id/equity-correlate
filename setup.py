@@ -72,12 +72,12 @@ project_urls = {
 }
 
 setup(
-    name="equity-correlate",
+    name="correlate",
     version="1.0.0",
     description=short_description,
     long_description=long_description,
     long_description_content_type="text/markdown",
-    url="https://github.com/riz0id/equity-correlate",
+    url="https://github.com/riz0id/correlate",
     author="Jacob Leach",
     author_email="jacobleach@protonmail.com",
     license="MIT",
@@ -86,7 +86,7 @@ setup(
     keywords=keywords,
     include_package_data=True,
     package_data={},
-    packages=["equity-correlate"],
+    packages=["correlate"],
     py_modules=[],
     ext_modules=[],
     platforms=[
